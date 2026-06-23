@@ -151,11 +151,14 @@ save_file() {
   slack_upload -m "uploaded $(date '+%Y-%m-%d %H:%M:%S')" "$1"
 }
 
-# Send a file to a channel/user (or yourself). usage: send_file FILE [-c TARGET]
+# Send a file to a channel/user (or yourself).
+# usage: send_file FILE [TARGET]   (TARGET: #channel, @user, a name, or an id; -c TARGET also works)
 send_file() {
   local file="$1"; shift 2>/dev/null || true
-  if [ -z "$file" ]; then echo "usage: send_file FILE [-c #channel|@user|ID]" >&2; return 1; fi
-  slack_upload "$@" "$file"
+  if [ -z "$file" ]; then echo "usage: send_file FILE [TARGET]" >&2; return 1; fi
+  local target=""
+  if [ "$1" = "-c" ]; then target="$2"; elif [ -n "$1" ]; then target="$1"; fi
+  if [ -n "$target" ]; then slack_upload -c "$target" "$file"; else slack_upload "$file"; fi
 }
 
 # List recent files in a channel (your own DM by default).

@@ -62,7 +62,8 @@ Files and command output:
 
 ```sh
 save_file report.pdf                       # upload a file to your own DM
-send_file report.pdf -c '#team'            # upload to a channel
+send_file report.pdf pablo                 # upload to a user (positional target)
+send_file report.pdf '#team'               # upload to a channel
 slack_upload -c @alice -m 'see this' x.log # upload with a comment
 
 list_files                                 # files in your own DM
