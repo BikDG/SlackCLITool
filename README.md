@@ -10,7 +10,9 @@ still log into Slack in a browser.
 ## What you get
 
 - `slack_send` — send a message to yourself, a channel, or a user.
+- `send_message` — message a user or channel by name (positional form of `slack_send`).
 - `slack_upload` — upload a file (with `save_file` and `send_file` as shortcuts).
+- `list_files` / `fetch_file` — list and download files from a channel or your DM.
 - `lmk` — run a command, then Slack you its result and full output.
 - `notify_up` (alias `nup`) — ping a host until it replies, then message you.
 - `slack-refresh` — re-read the session from Firefox into `~/.slack_session`.
@@ -48,6 +50,8 @@ slack_send 'message to myself'             # your own DM
 slack_send -c '#general' 'message'         # a channel by name
 slack_send -c @alice 'message'             # a user by name
 slack_send -c C0123456789 'message'        # a channel by id
+send_message @alice 'message'              # positional target form
+send_message pablo 'message'               # names match fuzzily
 
 notify_up build-server                     # DM yourself when the host pings
 notify_up build-server -c '#builds'        # message a channel instead
@@ -60,6 +64,11 @@ Files and command output:
 save_file report.pdf                       # upload a file to your own DM
 send_file report.pdf -c '#team'            # upload to a channel
 slack_upload -c @alice -m 'see this' x.log # upload with a comment
+
+list_files                                 # files in your own DM
+list_files -c '#team' -n 100               # files in a channel
+fetch_file report.pdf                      # download newest match from your DM
+fetch_file report.pdf out.pdf -c '#team'   # from a channel, to a local path
 
 lmk make                                   # run `make`, then DM you pass/fail
 lmk -c '#builds' ./deploy.sh               # report the result to a channel
