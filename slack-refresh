@@ -1,0 +1,197 @@
+#!/usr/bin/env python3
+"""Re-extract Slack browser-session credentials (xoxc token + d cookie) from
+Firefox and write them to ~/.slack_session.
+
+Run this AFTER logging into Slack in Firefox. It cannot keep you logged in --
+it only copies whatever the live browser session currently holds.
+
+Firefox (unlike Chrome) stores both values in plaintext SQLite:
+  - d cookie   : <profile>/cookies.sqlite                       (moz_cookies)
+  - xoxc token : <profile>/storage/default/https+++app.slack.com/ls/data.sqlite
+                 (localStorage key 'localConfig_v2', usually snappy-compressed)
+
+Each candidate token is validated against auth.test before anything is written,
+so a stale or partial read never clobbers a working ~/.slack_session.
+
+Requires: python3 with the 'snappy' module (pip install python-snappy), which is
+only needed if your Firefox compresses the localStorage value.
+"""
+import configparser
+import json
+import os
+import shutil
+import sqlite3
+import sys
+import tempfile
+import urllib.parse
+import urllib.request
+
+PROFILE_BASES = [
+    "~/snap/firefox/common/.mozilla/firefox",
+    "~/.var/app/org.mozilla.firefox/.mozilla/firefox",
+    "~/.mozilla/firefox",
+    "~/Library/Application Support/Firefox/Profiles",  # macOS
+]
+SESSION_FILE = os.path.expanduser("~/.slack_session")
+
+
+def die(msg):
+    print(f"error: {msg}", file=sys.stderr)
+    sys.exit(1)
+
+
+def find_profile():
+    """Return the path to the default Firefox profile directory."""
+    for base in PROFILE_BASES:
+        base = os.path.expanduser(base)
+        ini = os.path.join(os.path.dirname(base) if base.endswith("Profiles") else base,
+                           "profiles.ini")
+        # macOS keeps profiles.ini one level up from Profiles/
+        if not os.path.isfile(ini):
+            ini = os.path.join(base, "profiles.ini")
+        if not os.path.isfile(ini):
+            continue
+        cp = configparser.ConfigParser()
+        cp.read(ini)
+        path = None
+        for sec in cp.sections():  # [Install...] Default= is the launched profile
+            if sec.startswith("Install") and cp.has_option(sec, "Default"):
+                path = cp.get(sec, "Default")
+                break
+        if not path:  # else a [ProfileN] flagged Default=1
+            for sec in cp.sections():
+                if sec.startswith("Profile") and cp.get(sec, "Default", fallback="0") == "1":
+                    path = cp.get(sec, "Path")
+                    break
+        if not path:  # else the first profile
+            for sec in cp.sections():
+                if sec.startswith("Profile") and cp.has_option(sec, "Path"):
+                    path = cp.get(sec, "Path")
+                    break
+        if path:
+            root = os.path.dirname(ini)
+            full = path if os.path.isabs(path) else os.path.join(root, path)
+            if os.path.isdir(full):
+                return full
+    die("Could not find a Firefox profile. Edit PROFILE_BASES in this script.")
+
+
+def snapshot(src, tmp):
+    """Copy a sqlite db (+ -wal/-shm) to tmp so we read a consistent, unlocked view."""
+    if not os.path.isfile(src):
+        return None
+    dst = os.path.join(tmp, os.path.basename(src))
+    shutil.copy2(src, dst)
+    for ext in ("-wal", "-shm"):
+        if os.path.exists(src + ext):
+            shutil.copy2(src + ext, dst + ext)
+    return dst
+
+
+def get_cookie(profile, tmp):
+    db = snapshot(os.path.join(profile, "cookies.sqlite"), tmp)
+    if not db:
+        die("cookies.sqlite not found in profile")
+    con = sqlite3.connect(db)
+    row = con.execute(
+        "SELECT value FROM moz_cookies WHERE name='d' AND host LIKE '%slack.com' "
+        "ORDER BY (host='.slack.com') DESC, length(value) DESC LIMIT 1"
+    ).fetchone()
+    con.close()
+    if not row:
+        die("No 'd' cookie for slack.com in Firefox. Are you logged into Slack?")
+    return row[0]
+
+
+def get_tokens(profile, tmp):
+    ls = os.path.join(profile, "storage/default/https+++app.slack.com/ls/data.sqlite")
+    db = snapshot(ls, tmp)
+    if not db:
+        die("Slack localStorage not found. Open Slack in Firefox first.")
+    con = sqlite3.connect(db)
+    row = con.execute(
+        "SELECT value, compression_type FROM data WHERE key='localConfig_v2'"
+    ).fetchone()
+    con.close()
+    if not row:
+        die("localConfig_v2 not present in Slack localStorage")
+    value, ctype = row
+    if isinstance(value, str):
+        value = value.encode("utf-8", "surrogatepass")
+    if ctype == 1:  # snappy
+        try:
+            import snappy
+        except ImportError:
+            die("localStorage is snappy-compressed; install it: pip install python-snappy")
+        value = snappy.decompress(value)
+    cfg = None
+    for enc in ("utf-8", "utf-16-le", "latin-1"):
+        try:
+            cfg = json.loads(value.decode(enc))
+            break
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            cfg = None
+    if not cfg:
+        die("Could not decode/parse localConfig_v2")
+    teams = cfg.get("teams", {}) or {}
+    toks = []
+    for tid, t in teams.items():
+        tok = (t or {}).get("token", "")
+        if tok.startswith("xoxc-"):
+            # enterprise installs first: they resolve to the workspace automatically
+            toks.append((not t.get("is_enterprise_install", False), tid, tok))
+    toks.sort()
+    return [(tid, tok) for _, tid, tok in toks]
+
+
+def auth_test(token, cookie):
+    data = urllib.parse.urlencode({"token": token}).encode()
+    req = urllib.request.Request(
+        "https://slack.com/api/auth.test", data=data,
+        headers={"Cookie": f"d={cookie};"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=15) as r:
+            return json.load(r)
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def write_session(token, cookie, res):
+    body = (
+        "# Slack browser-session credentials. Auto-generated by `slack-refresh`.\n"
+        "# Treat this file as a password. It is your live Slack session.\n"
+        f"export SLACK_XOXC='{token}'\n"
+        f"export SLACK_XOXD='{cookie}'\n"
+        f"export SLACK_USER_ID='{res.get('user_id', '')}'\n"
+        f"export SLACK_TEAM='{res.get('team_id', '')}'\n"
+    )
+    tmp = SESSION_FILE + ".tmp"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
+        f.write(body)
+    os.replace(tmp, SESSION_FILE)
+
+
+def main():
+    profile = find_profile()
+    with tempfile.TemporaryDirectory() as tmp:
+        cookie = get_cookie(profile, tmp)
+        tokens = get_tokens(profile, tmp)
+    if not tokens:
+        die("No xoxc tokens found in Slack localStorage")
+    for tid, tok in tokens:
+        res = auth_test(tok, cookie)
+        if res.get("ok"):
+            write_session(tok, cookie, res)
+            print(f"OK  Slack session refreshed -> {SESSION_FILE}")
+            print(f"    team {tid}  user {res.get('user')}  ({res.get('url')})")
+            print("    run `source ~/.slack_session` (or open a new shell) to pick it up")
+            return
+    last = auth_test(tokens[0][1], cookie)
+    die(f"All extracted tokens failed auth.test (last: {last.get('error')}). "
+        "Log out/in of Slack in Firefox, then re-run.")
+
+
+if __name__ == "__main__":
+    main()
