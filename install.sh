@@ -56,6 +56,7 @@ Done. Next steps:
   3) Run: slack-refresh
   4) Test: slack_send 'hello from slack-session-cli'
 
-Commands: slack_send, notify_up (alias: nup), slack-refresh.
+Commands: slack_send, slack_upload, save_file, send_file, lmk,
+          notify_up (alias: nup), slack-refresh.
 Read the README for usage and the security caveats.
 EOF

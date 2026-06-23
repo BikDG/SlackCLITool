@@ -90,6 +90,86 @@ slack_send() {
   esac
 }
 
+# Internal: upload a file to a resolved channel id.
+# usage: _slack_upload <channel_id> <file> [comment]
+_slack_upload() {
+  local channel="$1" file="$2" comment="${3:-}"
+  if [ ! -f "$file" ]; then echo "slack: file not found: $file" >&2; return 1; fi
+  local name size resp url fid
+  name="$(basename "$file")"
+  size="$(stat -c%s "$file" 2>/dev/null || stat -f%z "$file" 2>/dev/null)"
+  resp="$(_slack_api files.getUploadURLExternal "filename=$name" "length=$size")"
+  case "$resp" in *'"ok":true'*) ;; *) echo "slack: getUploadURL failed: $resp" >&2; return 1 ;; esac
+  url="$(printf '%s' "$resp" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("upload_url",""))')"
+  fid="$(printf '%s' "$resp" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("file_id",""))')"
+  curl -s -X POST -F "file=@$file" "$url" >/dev/null
+  local args=("files=[{\"id\":\"$fid\",\"title\":\"$name\"}]" "channel_id=$channel")
+  [ -n "$comment" ] && args+=("initial_comment=$comment")
+  resp="$(_slack_api files.completeUploadExternal "${args[@]}")"
+  case "$resp" in *'"ok":true'*) return 0 ;; *) echo "slack: completeUpload failed: $resp" >&2; return 1 ;; esac
+}
+
+# Upload a file to Slack.
+# usage: slack_upload [-c TARGET] [-m COMMENT] FILE
+slack_upload() {
+  local target="" comment=""
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      -c) target="$2"; shift 2 ;;
+      -m) comment="$2"; shift 2 ;;
+      *) break ;;
+    esac
+  done
+  local file="$1"
+  if [ -z "$file" ]; then echo "usage: slack_upload [-c TARGET] [-m COMMENT] FILE" >&2; return 1; fi
+  local chan; chan="$(_slack_resolve "$target")"
+  if [ -z "$chan" ]; then echo "slack_upload: could not resolve target '${target:-self}'" >&2; return 1; fi
+  _slack_upload "$chan" "$file" "$comment" && echo "slack: uploaded $(basename "$file") to ${target:-self}"
+}
+
+# Send a file to your own DM. usage: save_file FILE
+save_file() {
+  if [ -z "$1" ]; then echo "usage: save_file FILE" >&2; return 1; fi
+  slack_upload -m "uploaded $(date '+%Y-%m-%d %H:%M:%S')" "$1"
+}
+
+# Send a file to a channel/user (or yourself). usage: send_file FILE [-c TARGET]
+send_file() {
+  local file="$1"; shift 2>/dev/null || true
+  if [ -z "$file" ]; then echo "usage: send_file FILE [-c #channel|@user|ID]" >&2; return 1; fi
+  slack_upload "$@" "$file"
+}
+
+# Run a command, then Slack you its result and full output.
+# usage: lmk [-c TARGET] COMMAND [args...]
+lmk() {
+  local target=""
+  if [ "$1" = "-c" ]; then target="$2"; shift 2; fi
+  if [ "$#" -eq 0 ]; then echo "usage: lmk [-c TARGET] COMMAND [args...]" >&2; return 1; fi
+  local tmp start status dur msg last chan
+  tmp="$(mktemp "${TMPDIR:-/tmp}/lmk.XXXXXX")"
+  start="$(date +%s)"
+  "$@" 2>&1 | tee "$tmp"
+  status="${PIPESTATUS[0]}"
+  dur=$(( $(date +%s) - start ))
+  if [ "$status" -eq 0 ]; then
+    msg=":white_check_mark: succeeded: $* (${dur}s)"
+  else
+    msg=":x: failed (exit $status): $* (${dur}s)"
+  fi
+  last="$(tail -25 "$tmp")"
+  [ -n "$last" ] && msg="$msg"$'\n''```'$'\n'"$last"$'\n''```'
+  chan="$(_slack_resolve "$target")"
+  if [ -n "$chan" ]; then
+    _slack_api chat.postMessage "channel=$chan" "text=$msg" >/dev/null
+    _slack_upload "$chan" "$tmp" "output of: $*" >/dev/null 2>&1
+  else
+    echo "lmk: could not resolve target '${target:-self}'" >&2
+  fi
+  rm -f "$tmp"
+  return "$status"
+}
+
 # Ping a host until it replies, then send a Slack message (to yourself by default).
 # usage: notify_up <host> [-c TARGET]
 notify_up() {

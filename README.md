@@ -10,6 +10,8 @@ still log into Slack in a browser.
 ## What you get
 
 - `slack_send` — send a message to yourself, a channel, or a user.
+- `slack_upload` — upload a file (with `save_file` and `send_file` as shortcuts).
+- `lmk` — run a command, then Slack you its result and full output.
 - `notify_up` (alias `nup`) — ping a host until it replies, then message you.
 - `slack-refresh` — re-read the session from Firefox into `~/.slack_session`.
 
@@ -51,6 +53,20 @@ notify_up build-server                     # DM yourself when the host pings
 notify_up build-server -c '#builds'        # message a channel instead
 nup build-server                           # same, short alias
 ```
+
+Files and command output:
+
+```sh
+save_file report.pdf                       # upload a file to your own DM
+send_file report.pdf -c '#team'            # upload to a channel
+slack_upload -c @alice -m 'see this' x.log # upload with a comment
+
+lmk make                                   # run `make`, then DM you pass/fail
+lmk -c '#builds' ./deploy.sh               # report the result to a channel
+```
+
+`lmk` streams the command's output to your terminal as usual, then sends a
+pass/fail summary with the last 25 lines and attaches the full output as a file.
 
 `notify_up` returns immediately and runs in the background of your shell. To
 survive logout, run it under `nohup`, `disown`, or inside `tmux`.
