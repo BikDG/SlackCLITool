@@ -16,6 +16,7 @@ still log into Slack in a browser.
 - `lmk` — run a command, then Slack you its result and full output.
 - `listen` — poll a channel, DM, group, or thread and print new messages as they arrive.
 - `lad` — listen for a message matching a string, then run a command (once or on every match).
+- `runitnow` — background watcher that runs any `!!command` posted in a channel and replies in-thread.
 - `notify_up` (alias `nup`) — ping a host until it replies, then message you.
 - `slack-refresh` — re-read the session from Firefox into `~/.slack_session`.
 
@@ -113,6 +114,23 @@ with `--loop true` it keeps running and fires on every match, and you can stop
 it by sending `!quit` in the watched conversation. All flags accept
 `--flag value` or `--flag=value`. It ignores its own status messages, so in loop
 mode pick a `--message` that will not appear in your command's output.
+
+Run commands posted to a channel:
+
+```sh
+runitnow '#ops'                            # watch a channel in the background
+runitnow @alice                            # or a DM
+```
+
+`runitnow` polls the channel once a second in the background. Any message that
+starts with `!!` is run as a shell command and the output is posted as a
+threaded reply to that message. For example, posting `!!echo "HI"` replies `HI`.
+It returns immediately and prints a pid; stop it with `kill <pid>`. Only
+messages posted after it starts are run. To survive logout, run it under
+`nohup`, `disown`, or inside `tmux`.
+
+WARNING: `runitnow` executes arbitrary commands from anyone who can post to the
+watched channel, as you. Only point it at a channel you trust.
 
 `notify_up` returns immediately and runs in the background of your shell. To
 survive logout, run it under `nohup`, `disown`, or inside `tmux`.

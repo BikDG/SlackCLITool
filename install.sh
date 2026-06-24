@@ -57,7 +57,7 @@ Done. Next steps:
   4) Test: slack_send 'hello from slack-session-cli'
 
 Commands: slack_send, send_message, slack_upload, save_file, send_file,
-          list_files, fetch_file, lmk, listen, lad, notify_up (alias: nup),
-          slack-refresh.
+          list_files, fetch_file, lmk, listen, lad, runitnow,
+          notify_up (alias: nup), slack-refresh.
 Read the README for usage and the security caveats.
 EOF

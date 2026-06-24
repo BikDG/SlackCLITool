@@ -459,3 +459,68 @@ lad() {
     done < "$fifo"
   )
 }
+
+# Watch a channel in the background and run any message that starts with "!!",
+# replying in-thread with the command's output.
+# usage: runitnow CHANNEL
+#   CHANNEL   #channel, @user, a name, or a channel/user/group id
+# Send "!!echo hi" in the channel and it runs `echo hi`, then replies to that
+# message with the output. Polls once a second. Only messages posted after it
+# starts are run. WARNING: this executes arbitrary commands from the channel.
+runitnow() {
+  local target="$1"
+  if [ -z "$target" ]; then echo "usage: runitnow CHANNEL" >&2; return 1; fi
+  local chan; chan="$(_slack_resolve "$target")"
+  if [ -z "$chan" ]; then echo "runitnow: could not resolve target '$target'" >&2; return 1; fi
+
+  # For each new message whose text starts with "!!", emit
+  # "RUN<tab><message ts><tab><base64 of the command>"; close with the sentinel
+  # high-water ts. "prime" emits only the sentinel. Slack escapes &<>, so undo
+  # that before running. base64 keeps multi-line commands on a single line.
+  local py='import sys, json, base64
+arg = sys.argv[1]
+prime = (arg == "prime")
+last = 0.0 if (prime or not arg) else float(arg)
+d = json.load(sys.stdin)
+realmax = last
+hits = []
+for m in d.get("messages", []):
+    try:
+        t = float(m.get("ts", "0"))
+    except ValueError:
+        continue
+    if t > realmax:
+        realmax = t
+    if (not prime) and t > last:
+        txt = m.get("text", "")
+        if txt.startswith("!!"):
+            cmd = txt[2:].replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&")
+            hits.append((t, m.get("ts", ""), base64.b64encode(cmd.encode()).decode()))
+hits.sort(key=lambda x: x[0])
+for t, ts, b in hits:
+    print("RUN\t%s\t%s" % (ts, b))
+print("@@TS@@%r" % realmax)'
+
+  (
+    last="$(_slack_api conversations.history "channel=$chan" "limit=200" | python3 -c "$py" prime)"
+    last="${last##*@@TS@@}"
+    while :; do
+      out="$(_slack_api conversations.history "channel=$chan" "limit=200" | python3 -c "$py" "$last")"
+      last="${out##*@@TS@@}"
+      body="${out%@@TS@@*}"
+      if [ -n "$body" ]; then
+        while IFS="$(printf '\t')" read -r tag ts b64; do
+          [ "$tag" = "RUN" ] || continue
+          cmd="$(printf '%s' "$b64" | base64 -d 2>/dev/null)"
+          cout="$(bash -c "$cmd" 2>&1)"
+          [ -n "$cout" ] || cout="(no output)"
+          _slack_api chat.postMessage "channel=$chan" "thread_ts=$ts" "text=$cout" >/dev/null
+        done <<EOF
+$body
+EOF
+      fi
+      sleep 1
+    done
+  ) &
+  echo "runitnow: watching $target every 1s for '!!' commands (pid $!). Stop with: kill $!"
+}
