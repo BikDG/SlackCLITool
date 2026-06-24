@@ -103,11 +103,13 @@ lad --person '#ops' --message restart --loop true --command 'systemctl restart a
 
 `lad` watches a person/group with `listen` and, when an incoming message
 contains the `--message` string, messages them `running command: <cmd>`, runs
-the command, then messages `command completed: <output>`.
+the command, then messages `command completed: <output>`. On start it also
+messages them what command is armed, on what trigger, and how to stop it.
 
 The person defaults to `myself` (your own DM); give it positionally or with
 `--person`. With `--loop false` (the default) it stops after the first match;
-with `--loop true` it keeps running and fires on every match. All flags accept
+with `--loop true` it keeps running and fires on every match, and you can stop
+it by sending `!quit` in the watched conversation. All flags accept
 `--flag value` or `--flag=value`. It ignores its own status messages, so in loop
 mode pick a `--message` that will not appear in your command's output.
 

@@ -376,8 +376,10 @@ _kill_tree() {
 #   --loop       true: run again on every match; false (default): stop after
 #                the first match
 # Flags accept either "--flag value" or "--flag=value".
-# On each match lad messages PERSON "running command: <cmd>", runs the command,
-# then messages "command completed: <output>". It ignores its own status
+# On start lad messages PERSON what command it will run, on what trigger, and
+# (in loop mode) how to stop it. On each match it messages "running command:
+# <cmd>", runs the command, then messages "command completed: <output>". In loop
+# mode, sending "!quit" ends the loop and quits. It ignores its own status
 # messages; in loop mode, pick a --message unlikely to appear in command output.
 lad() {
   local pos="" person="" msg="" command="" loop="false"
@@ -409,6 +411,17 @@ lad() {
   esac
 
   echo "lad: listening to $target for \"$msg\" (loop=$loop); on match runs: $command" >&2
+
+  # Tell the user what is armed. This message is prefixed "lad armed:" so the
+  # listen loop skips it (it quotes $msg and, in loop mode, "!quit").
+  local announce="lad armed: I will run \`$command\` whenever a message here contains \"$msg\"."
+  if [ "$loop" = "true" ]; then
+    announce="$announce It will run on every match. Send \"!quit\" to stop the loop."
+  else
+    announce="$announce It will run once, then stop."
+  fi
+  send_message "$listen_target" "$announce" >/dev/null
+
   # Subshell owns the fifo and the background listen, so traps are local and
   # cleanup happens on a clean exit or on Ctrl-C.
   (
@@ -422,8 +435,17 @@ lad() {
       # Strip the "[HH:MM:SS] name: " prefix so we match on message text only.
       local text="${line#*: }"
       case "$text" in
-        "running command: "*|"command completed:"*) continue ;;  # our own echoes
+        "running command: "*|"command completed:"*|"lad armed:"*) continue ;;  # our own echoes
       esac
+      # In loop mode, "!quit" ends the loop and quits.
+      if [ "$loop" = "true" ]; then
+        case "$text" in
+          *"!quit"*)
+            send_message "$listen_target" "lad armed: stopped (received !quit)." >/dev/null
+            echo "lad: received !quit, stopping." >&2
+            break ;;
+        esac
+      fi
       case "$text" in
         *"$msg"*)
           send_message "$listen_target" "running command: $command" >/dev/null
