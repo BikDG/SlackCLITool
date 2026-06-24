@@ -376,11 +376,13 @@ _kill_tree() {
 #   --loop       true: run again on every match; false (default): stop after
 #                the first match
 # Flags accept either "--flag value" or "--flag=value".
-# On start lad messages PERSON what command it will run, on what trigger, and
-# (in loop mode) how to stop it. On each match it messages "running command:
-# <cmd>", runs the command, then messages "command completed: <output>". In loop
-# mode, sending "!quit" ends the loop and quits. It ignores its own status
-# messages; in loop mode, pick a --message unlikely to appear in command output.
+# On start lad messages PERSON:
+#   Listening for "<msg>" to run command "<cmd>" and loop is <True/False>.
+#   Send "!quit" to end the loop.   (the !quit line only when loop is true)
+# On each match it messages "running command: <cmd>", runs the command, then
+# messages "command completed: <output>". In loop mode, sending "!quit" ends the
+# loop and quits. It ignores its own status messages; in loop mode, pick a
+# --message unlikely to appear in command output.
 lad() {
   local pos="" person="" msg="" command="" loop="false"
   while [ "$#" -gt 0 ]; do
@@ -412,14 +414,12 @@ lad() {
 
   echo "lad: listening to $target for \"$msg\" (loop=$loop); on match runs: $command" >&2
 
-  # Tell the user what is armed. This message is prefixed "lad armed:" so the
-  # listen loop skips it (it quotes $msg and, in loop mode, "!quit").
-  local announce="lad armed: I will run \`$command\` whenever a message here contains \"$msg\"."
-  if [ "$loop" = "true" ]; then
-    announce="$announce It will run on every match. Send \"!quit\" to stop the loop."
-  else
-    announce="$announce It will run once, then stop."
-  fi
+  # Tell the user what is armed. Sent BEFORE listen starts, so listen's prime
+  # step records it as already-seen and never echoes it back into the loop
+  # (an exact-match guard below is a second line of defense).
+  local loopdisp="False"; [ "$loop" = "true" ] && loopdisp="True"
+  local announce="Listening for \"$msg\" to run command \"$command\" and loop is $loopdisp."
+  [ "$loop" = "true" ] && announce="$announce Send \"!quit\" to end the loop."
   send_message "$listen_target" "$announce" >/dev/null
 
   # Subshell owns the fifo and the background listen, so traps are local and
@@ -434,14 +434,15 @@ lad() {
     while IFS= read -r line; do
       # Strip the "[HH:MM:SS] name: " prefix so we match on message text only.
       local text="${line#*: }"
+      [ "$text" = "$announce" ] && continue            # our own announce
       case "$text" in
-        "running command: "*|"command completed:"*|"lad armed:"*) continue ;;  # our own echoes
+        "running command: "*|"command completed:"*) continue ;;  # our own status echoes
       esac
       # In loop mode, "!quit" ends the loop and quits.
       if [ "$loop" = "true" ]; then
         case "$text" in
           *"!quit"*)
-            send_message "$listen_target" "lad armed: stopped (received !quit)." >/dev/null
+            send_message "$listen_target" "Stopped: received !quit." >/dev/null
             echo "lad: received !quit, stopping." >&2
             break ;;
         esac
