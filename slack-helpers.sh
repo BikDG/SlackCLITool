@@ -527,7 +527,10 @@ print("@@TS@@%r" % realmax)'
           cmd="$(printf '%s' "$b64" | base64 -d 2>/dev/null)"
           # "!!quit" / "!!stop" is a reserved control word: confirm in-thread and
           # exit this background watcher instead of running it as a command.
-          case "$(printf '%s' "$cmd" | tr -d '[:space:]')" in
+          # Strip whitespace with pure bash (not `tr`): a user may have shadowed
+          # `tr` with a shell function, which would break the match and spew its
+          # own errors.
+          case "${cmd//[[:space:]]/}" in
             quit|stop)
               _slack_api chat.postMessage "channel=$chan" "thread_ts=$ts" "text=runitnow: stopped." >/dev/null
               exit 0 ;;
