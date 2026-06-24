@@ -466,7 +466,9 @@ lad() {
 #   CHANNEL   #channel, @user, a name, or a channel/user/group id
 # Send "!!echo hi" in the channel and it runs `echo hi`, then replies to that
 # message with the output. Polls once a second. Only messages posted after it
-# starts are run. WARNING: this executes arbitrary commands from the channel.
+# starts are run. Commands run in a non-interactive shell that first sources
+# ~/.bashrc (with alias expansion on), so functions and aliases such as `nup`
+# work. WARNING: this executes arbitrary commands from the channel.
 runitnow() {
   local target="$1"
   if [ -z "$target" ]; then echo "usage: runitnow CHANNEL" >&2; return 1; fi
@@ -521,7 +523,13 @@ print("@@TS@@%r" % realmax)'
         while IFS="$(printf '\t')" read -r tag ts b64; do
           [ "$tag" = "RUN" ] || continue
           cmd="$(printf '%s' "$b64" | base64 -d 2>/dev/null)"
-          cout="$(bash -c "$cmd" 2>&1)"
+          # Run in a non-interactive shell, but source ~/.bashrc (with alias
+          # expansion on) first so functions and aliases like `nup` work.
+          # Sourcing output is discarded so only the command's output is sent.
+          cout="$(RUNITNOW_CMD="$cmd" bash -c '
+            shopt -s expand_aliases
+            [ -f "$HOME/.bashrc" ] && source "$HOME/.bashrc" >/dev/null 2>&1
+            eval "$RUNITNOW_CMD"' 2>&1)"
           [ -n "$cout" ] || cout="(no output)"
           _slack_api chat.postMessage "channel=$chan" "thread_ts=$ts" "text=$cout" >/dev/null
         done <<EOF

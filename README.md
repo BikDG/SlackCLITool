@@ -129,6 +129,10 @@ It returns immediately and prints a pid; stop it with `kill <pid>`. Only
 messages posted after it starts are run. To survive logout, run it under
 `nohup`, `disown`, or inside `tmux`.
 
+Commands run in a non-interactive shell that sources `~/.bashrc` first (with
+alias expansion enabled), so your functions and aliases work too. For example,
+posting `!!nup mg1-systel` runs the `nup` alias.
+
 WARNING: `runitnow` executes arbitrary commands from anyone who can post to the
 watched channel, as you. Only point it at a channel you trust.
 
