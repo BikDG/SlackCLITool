@@ -526,10 +526,16 @@ print("@@TS@@%r" % realmax)'
           # Run in a non-interactive shell, but source ~/.bashrc (with alias
           # expansion on) first so functions and aliases like `nup` work.
           # Sourcing output is discarded so only the command's output is sent.
-          cout="$(RUNITNOW_CMD="$cmd" bash -c '
+          # Capture to a file (not "$(...)") with stdin closed: commands that
+          # background a job (e.g. nup) would otherwise keep the substitution
+          # pipe open and hang the whole loop. The file decouples us from any
+          # lingering background process, which keeps running on its own.
+          cf="$(mktemp "${TMPDIR:-/tmp}/runitnow.XXXXXX")"
+          RUNITNOW_CMD="$cmd" bash -c '
             shopt -s expand_aliases
             [ -f "$HOME/.bashrc" ] && source "$HOME/.bashrc" >/dev/null 2>&1
-            eval "$RUNITNOW_CMD"' 2>&1)"
+            eval "$RUNITNOW_CMD"' </dev/null >"$cf" 2>&1
+          cout="$(cat "$cf")"; rm -f "$cf"
           [ -n "$cout" ] || cout="(no output)"
           _slack_api chat.postMessage "channel=$chan" "thread_ts=$ts" "text=$cout" >/dev/null
         done <<EOF
