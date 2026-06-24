@@ -109,12 +109,14 @@ send_message() {
 }
 
 # Internal: upload a file to a resolved channel id.
-# usage: _slack_upload <channel_id> <file> [comment]
+# usage: _slack_upload <channel_id> <file> [comment] [thread_ts] [name]
+#   thread_ts  share the file into that thread instead of the channel root
+#   name       display/filename to use instead of the file's basename
 _slack_upload() {
-  local channel="$1" file="$2" comment="${3:-}"
+  local channel="$1" file="$2" comment="${3:-}" thread="${4:-}" name="${5:-}"
   if [ ! -f "$file" ]; then echo "slack: file not found: $file" >&2; return 1; fi
-  local name size resp url fid
-  name="$(basename "$file")"
+  local size resp url fid
+  [ -n "$name" ] || name="$(basename "$file")"
   size="$(stat -c%s "$file" 2>/dev/null || stat -f%z "$file" 2>/dev/null)"
   resp="$(_slack_api files.getUploadURLExternal "filename=$name" "length=$size")"
   case "$resp" in *'"ok":true'*) ;; *) echo "slack: getUploadURL failed: $resp" >&2; return 1 ;; esac
@@ -123,6 +125,7 @@ _slack_upload() {
   curl -s -X POST -F "file=@$file" "$url" >/dev/null
   local args=("files=[{\"id\":\"$fid\",\"title\":\"$name\"}]" "channel_id=$channel")
   [ -n "$comment" ] && args+=("initial_comment=$comment")
+  [ -n "$thread" ] && args+=("thread_ts=$thread")
   resp="$(_slack_api files.completeUploadExternal "${args[@]}")"
   case "$resp" in *'"ok":true'*) return 0 ;; *) echo "slack: completeUpload failed: $resp" >&2; return 1 ;; esac
 }
@@ -574,18 +577,22 @@ print("@@TS@@%r" % realmax)'
             shopt -s expand_aliases
             [ -f "$HOME/.bashrc" ] && source "$HOME/.bashrc" >/dev/null 2>&1
             eval "$RUNITNOW_CMD"' </dev/null >"$cf" 2>&1
-          cout="$(cat "$cf")"; rm -f "$cf"
+          cout="$(cat "$cf")"
           [ -n "$cout" ] || cout="(no output)"
-          # Cap the output before posting. Slack limits message size, and exec
-          # limits a single argument to ~128 KB, so large output (e.g.
-          # `tailscale status`) would otherwise fail to send via curl and you'd
-          # get nothing back. Keep the head and note how much was dropped.
+          # Cap the inlined output. Slack limits message size, and exec limits a
+          # single argument to ~128 KB, so large output (e.g. `tailscale status`)
+          # can't be posted as text. Inline the head; attach the full output as a
+          # file in the thread when it was truncated.
+          local big=0
           if [ "${#cout}" -gt 3000 ]; then
-            cout="${cout:0:3000}"$'\n'"... (truncated; full output was ${#cout} chars)"
+            cout="${cout:0:3000}"$'\n'"... (truncated; full output was ${#cout} chars — see attached file)"
+            big=1
           fi
           # Lead with which instance answered, then the output in a code block.
           reply="$BASHPID running on machine $host replies:"$'\n''```'$'\n'"$cout"$'\n''```'
           _slack_api chat.postMessage "channel=$chan" "thread_ts=$ts" "text=$reply" >/dev/null
+          [ "$big" -eq 1 ] && _slack_upload "$chan" "$cf" "full output from pid $BASHPID on $host" "$ts" "output-$BASHPID-$host.txt" >/dev/null 2>&1
+          rm -f "$cf"
         done <<EOF
 $body
 EOF

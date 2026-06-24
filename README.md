@@ -133,6 +133,9 @@ a code block. For example, posting `!!echo "HI"` replies:
 HI
 ```
 ````
+
+If the output is too large to inline, the reply shows the head and the full
+output is attached as a file in the thread.
 It returns immediately and prints a pid. Several control words help when more
 than one watcher (e.g. on different machines) is on the same channel; a
 *target* is a watcher's pid or its hostname:
