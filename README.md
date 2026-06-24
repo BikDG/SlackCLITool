@@ -127,9 +127,10 @@ starts with `!!` is run as a shell command and the output is posted as a
 threaded reply to that message. For example, posting `!!echo "HI"` replies `HI`.
 It returns immediately and prints a pid. Stop it by posting `!!quit` (or
 `!!stop`) in the channel, or from the shell with `kill <pid>`. Post `!!report`
-and every watcher of the channel replies in-thread with its own pid. Only
-messages posted after it starts are run. To survive logout, run it under
-`nohup`, `disown`, or inside `tmux`.
+and every watcher of the channel replies in-thread with its own pid; post
+`!!quit <pid>` (or `!!stop <pid>`) to stop only the watcher with that pid while
+the others keep running. Only messages posted after it starts are run. To
+survive logout, run it under `nohup`, `disown`, or inside `tmux`.
 
 Commands run in a non-interactive shell that sources `~/.bashrc` first (with
 alias expansion enabled), so your functions and aliases work too. For example,

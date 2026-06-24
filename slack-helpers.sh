@@ -468,9 +468,10 @@ lad() {
 # message with the output. Polls once a second. Only messages posted after it
 # starts are run. Commands run in a non-interactive shell that first sources
 # ~/.bashrc (with alias expansion on), so functions and aliases such as `nup`
-# work. Send "!!quit" (or "!!stop") in the channel to stop the watcher; you can
-# also stop it from the shell with `kill <pid>`. Send "!!report" and every
-# watcher of the channel replies with its own pid.
+# work. Control words (first word of the message): "!!quit"/"!!stop" stop every
+# watcher of the channel, "!!quit PID"/"!!stop PID" stop only the watcher with
+# that pid, and "!!report" makes each watcher reply with its own pid. You can
+# also stop one from the shell with `kill <pid>`.
 # WARNING: this executes arbitrary commands from the channel.
 runitnow() {
   local target="$1"
@@ -526,17 +527,21 @@ print("@@TS@@%r" % realmax)'
         while IFS="$(printf '\t')" read -r tag ts b64; do
           [ "$tag" = "RUN" ] || continue
           cmd="$(printf '%s' "$b64" | base64 -d 2>/dev/null)"
-          # "!!quit" / "!!stop" is a reserved control word: confirm in-thread and
-          # exit this background watcher instead of running it as a command.
-          # Strip whitespace with pure bash (not `tr`): a user may have shadowed
-          # `tr` with a shell function, which would break the match and spew its
-          # own errors.
-          case "${cmd//[[:space:]]/}" in
+          # Reserved control words, matched on the first word of the message:
+          #   !!quit / !!stop          -> every watcher of this channel stops
+          #   !!quit PID / !!stop PID  -> only the watcher whose pid is PID stops
+          #   !!report                 -> each watcher replies with its own pid
+          # Split with read (IFS reset to whitespace; the outer loop's IFS is a
+          # tab) rather than `tr`, which a user may have shadowed with a function.
+          IFS=$' \t' read -r kw arg _rest <<< "$cmd"
+          case "$kw" in
             quit|stop)
-              _slack_api chat.postMessage "channel=$chan" "thread_ts=$ts" "text=runitnow: stopped." >/dev/null
-              exit 0 ;;
+              if [ -z "$arg" ] || [ "$arg" = "$BASHPID" ]; then
+                _slack_api chat.postMessage "channel=$chan" "thread_ts=$ts" "text=runitnow: stopped (pid $BASHPID)." >/dev/null
+                exit 0
+              fi
+              continue ;;   # PID given but not us: stay silent, keep running
             report)
-              # Each watcher of this channel replies in-thread with its own pid.
               _slack_api chat.postMessage "channel=$chan" "thread_ts=$ts" "text=runitnow: pid $BASHPID watching $target" >/dev/null
               continue ;;
           esac
@@ -562,5 +567,5 @@ EOF
       sleep 1
     done
   ) &
-  echo "runitnow: watching $target every 1s for '!!' commands (pid $!). '!!report' lists pids, '!!quit' stops (or: kill $!)"
+  echo "runitnow: watching $target every 1s for '!!' commands (pid $!). '!!report' lists pids, '!!quit' stops all, '!!quit $!' stops just this one (or: kill $!)"
 }
