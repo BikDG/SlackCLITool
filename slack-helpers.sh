@@ -468,7 +468,9 @@ lad() {
 # message with the output. Polls once a second. Only messages posted after it
 # starts are run. Commands run in a non-interactive shell that first sources
 # ~/.bashrc (with alias expansion on), so functions and aliases such as `nup`
-# work. WARNING: this executes arbitrary commands from the channel.
+# work. Send "!!quit" (or "!!stop") in the channel to stop the watcher; you can
+# also stop it from the shell with `kill <pid>`.
+# WARNING: this executes arbitrary commands from the channel.
 runitnow() {
   local target="$1"
   if [ -z "$target" ]; then echo "usage: runitnow CHANNEL" >&2; return 1; fi
@@ -523,6 +525,13 @@ print("@@TS@@%r" % realmax)'
         while IFS="$(printf '\t')" read -r tag ts b64; do
           [ "$tag" = "RUN" ] || continue
           cmd="$(printf '%s' "$b64" | base64 -d 2>/dev/null)"
+          # "!!quit" / "!!stop" is a reserved control word: confirm in-thread and
+          # exit this background watcher instead of running it as a command.
+          case "$(printf '%s' "$cmd" | tr -d '[:space:]')" in
+            quit|stop)
+              _slack_api chat.postMessage "channel=$chan" "thread_ts=$ts" "text=runitnow: stopped." >/dev/null
+              exit 0 ;;
+          esac
           # Run in a non-interactive shell, but source ~/.bashrc (with alias
           # expansion on) first so functions and aliases like `nup` work.
           # Sourcing output is discarded so only the command's output is sent.
@@ -545,5 +554,5 @@ EOF
       sleep 1
     done
   ) &
-  echo "runitnow: watching $target every 1s for '!!' commands (pid $!). Stop with: kill $!"
+  echo "runitnow: watching $target every 1s for '!!' commands (pid $!). Stop with '!!quit' in the channel or: kill $!"
 }

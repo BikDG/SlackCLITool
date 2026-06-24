@@ -125,9 +125,10 @@ runitnow @alice                            # or a DM
 `runitnow` polls the channel once a second in the background. Any message that
 starts with `!!` is run as a shell command and the output is posted as a
 threaded reply to that message. For example, posting `!!echo "HI"` replies `HI`.
-It returns immediately and prints a pid; stop it with `kill <pid>`. Only
-messages posted after it starts are run. To survive logout, run it under
-`nohup`, `disown`, or inside `tmux`.
+It returns immediately and prints a pid. Stop it by posting `!!quit` (or
+`!!stop`) in the channel, or from the shell with `kill <pid>`. Only messages
+posted after it starts are run. To survive logout, run it under `nohup`,
+`disown`, or inside `tmux`.
 
 Commands run in a non-interactive shell that sources `~/.bashrc` first (with
 alias expansion enabled), so your functions and aliases work too. For example,
