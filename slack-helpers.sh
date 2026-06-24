@@ -576,7 +576,9 @@ print("@@TS@@%r" % realmax)'
             eval "$RUNITNOW_CMD"' </dev/null >"$cf" 2>&1
           cout="$(cat "$cf")"; rm -f "$cf"
           [ -n "$cout" ] || cout="(no output)"
-          _slack_api chat.postMessage "channel=$chan" "thread_ts=$ts" "text=$cout" >/dev/null
+          # Lead with which instance answered, then the output in a code block.
+          reply="$BASHPID running on machine $host replies:"$'\n''```'$'\n'"$cout"$'\n''```'
+          _slack_api chat.postMessage "channel=$chan" "thread_ts=$ts" "text=$reply" >/dev/null
         done <<EOF
 $body
 EOF

@@ -124,7 +124,15 @@ runitnow @alice                            # or a DM
 
 `runitnow` polls the channel once a second in the background. Any message that
 starts with `!!` is run as a shell command and the output is posted as a
-threaded reply to that message. For example, posting `!!echo "HI"` replies `HI`.
+threaded reply to that message, led by which instance answered and the output in
+a code block. For example, posting `!!echo "HI"` replies:
+
+````
+<pid> running on machine <host> replies:
+```
+HI
+```
+````
 It returns immediately and prints a pid. Several control words help when more
 than one watcher (e.g. on different machines) is on the same channel; a
 *target* is a watcher's pid or its hostname:
