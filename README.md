@@ -125,12 +125,20 @@ runitnow @alice                            # or a DM
 `runitnow` polls the channel once a second in the background. Any message that
 starts with `!!` is run as a shell command and the output is posted as a
 threaded reply to that message. For example, posting `!!echo "HI"` replies `HI`.
-It returns immediately and prints a pid. Stop it by posting `!!quit` (or
-`!!stop`) in the channel, or from the shell with `kill <pid>`. Post `!!report`
-and every watcher of the channel replies in-thread with its own pid; post
-`!!quit <pid>` (or `!!stop <pid>`) to stop only the watcher with that pid while
-the others keep running. Only messages posted after it starts are run. To
-survive logout, run it under `nohup`, `disown`, or inside `tmux`.
+It returns immediately and prints a pid. Several control words help when more
+than one watcher (e.g. on different machines) is on the same channel; a
+*target* is a watcher's pid or its hostname:
+
+- `!!report` — every watcher replies in-thread with its pid, host, and channel.
+- `!!quit` / `!!stop` — every watcher of the channel stops.
+- `!!quit <target>` / `!!stop <target>` — only watchers matching the target
+  (a pid, or a hostname to stop all of that host's watchers) stop.
+- `!!@<target> <command>` — only watchers matching the target run the command;
+  the others ignore it. A bare `!!command` still runs on every watcher.
+
+You can also stop one from the shell with `kill <pid>`. Only messages posted
+after it starts are run. To survive logout, run it under `nohup`, `disown`, or
+inside `tmux`.
 
 Commands run in a non-interactive shell that sources `~/.bashrc` first (with
 alias expansion enabled), so your functions and aliases work too. For example,

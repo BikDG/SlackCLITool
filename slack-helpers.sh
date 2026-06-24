@@ -468,16 +468,22 @@ lad() {
 # message with the output. Polls once a second. Only messages posted after it
 # starts are run. Commands run in a non-interactive shell that first sources
 # ~/.bashrc (with alias expansion on), so functions and aliases such as `nup`
-# work. Control words (first word of the message): "!!quit"/"!!stop" stop every
-# watcher of the channel, "!!quit PID"/"!!stop PID" stop only the watcher with
-# that pid, and "!!report" makes each watcher reply with its own pid. You can
-# also stop one from the shell with `kill <pid>`.
-# WARNING: this executes arbitrary commands from the channel.
+# work. Control words (first word of the message); TARGET is a watcher's pid or
+# its hostname:
+#   !!quit / !!stop      stop every watcher of the channel
+#   !!quit TARGET        stop only watchers matching TARGET
+#   !!report             each watcher replies with its pid, host, and channel
+#   !!@TARGET CMD        only watchers matching TARGET run CMD (others ignore)
+# A bare "!!CMD" runs on every watcher. You can also stop one from the shell
+# with `kill <pid>`. WARNING: this executes arbitrary commands from the channel.
 runitnow() {
   local target="$1"
   if [ -z "$target" ]; then echo "usage: runitnow CHANNEL" >&2; return 1; fi
   local chan; chan="$(_slack_resolve "$target")"
   if [ -z "$chan" ]; then echo "runitnow: could not resolve target '$target'" >&2; return 1; fi
+  # Hostname to identify this instance across machines ($HOSTNAME is a bash
+  # builtin var, so it works even if `hostname` is shadowed by a function).
+  local host="${HOSTNAME:-$(uname -n 2>/dev/null)}"
 
   # For each new message whose text starts with "!!", emit
   # "RUN<tab><message ts><tab><base64 of the command>"; close with the sentinel
@@ -527,23 +533,34 @@ print("@@TS@@%r" % realmax)'
         while IFS="$(printf '\t')" read -r tag ts b64; do
           [ "$tag" = "RUN" ] || continue
           cmd="$(printf '%s' "$b64" | base64 -d 2>/dev/null)"
-          # Reserved control words, matched on the first word of the message:
-          #   !!quit / !!stop          -> every watcher of this channel stops
-          #   !!quit PID / !!stop PID  -> only the watcher whose pid is PID stops
-          #   !!report                 -> each watcher replies with its own pid
+          # Reserved control words, matched on the first word of the message.
+          # A "target" below is this instance's pid or its hostname:
+          #   !!quit / !!stop           -> every watcher of this channel stops
+          #   !!quit TARGET             -> only watchers matching TARGET stop
+          #   !!report                  -> each watcher replies with pid + host
+          #   !!@TARGET CMD             -> only watchers matching TARGET run CMD
           # Split with read (IFS reset to whitespace; the outer loop's IFS is a
           # tab) rather than `tr`, which a user may have shadowed with a function.
           IFS=$' \t' read -r kw arg _rest <<< "$cmd"
           case "$kw" in
             quit|stop)
-              if [ -z "$arg" ] || [ "$arg" = "$BASHPID" ]; then
-                _slack_api chat.postMessage "channel=$chan" "thread_ts=$ts" "text=runitnow: stopped (pid $BASHPID)." >/dev/null
+              if [ -z "$arg" ] || [ "$arg" = "$BASHPID" ] || [ "$arg" = "$host" ]; then
+                _slack_api chat.postMessage "channel=$chan" "thread_ts=$ts" "text=runitnow: stopped (pid $BASHPID on $host)." >/dev/null
                 exit 0
               fi
-              continue ;;   # PID given but not us: stay silent, keep running
+              continue ;;   # target given but not us: stay silent, keep running
             report)
-              _slack_api chat.postMessage "channel=$chan" "thread_ts=$ts" "text=runitnow: pid $BASHPID watching $target" >/dev/null
+              _slack_api chat.postMessage "channel=$chan" "thread_ts=$ts" "text=runitnow: pid $BASHPID on $host watching $target" >/dev/null
               continue ;;
+            @*)
+              # Targeted command: skip unless TARGET is our pid or hostname...
+              local tgt="${kw#@}"
+              if [ "$tgt" != "$BASHPID" ] && [ "$tgt" != "$host" ]; then continue; fi
+              # ...then strip the "@TARGET" token, leaving the real command in cmd.
+              local lt="${cmd#"${cmd%%[![:space:]]*}"}"
+              cmd="${lt#"$kw"}"
+              cmd="${cmd#"${cmd%%[![:space:]]*}"}"
+              ;;
           esac
           # Run in a non-interactive shell, but source ~/.bashrc (with alias
           # expansion on) first so functions and aliases like `nup` work.
@@ -567,5 +584,5 @@ EOF
       sleep 1
     done
   ) &
-  echo "runitnow: watching $target every 1s for '!!' commands (pid $!). '!!report' lists pids, '!!quit' stops all, '!!quit $!' stops just this one (or: kill $!)"
+  echo "runitnow: $host watching $target every 1s for '!!' commands (pid $!). '!!report' lists instances, '!!quit' stops all, '!!quit $!' stops this one, '!!@$host CMD' targets this host (or: kill $!)"
 }
