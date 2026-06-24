@@ -475,12 +475,21 @@ runitnow() {
 
   # For each new message whose text starts with "!!", emit
   # "RUN<tab><message ts><tab><base64 of the command>"; close with the sentinel
-  # high-water ts. "prime" emits only the sentinel. Slack escapes &<>, so undo
-  # that before running. base64 keeps multi-line commands on a single line.
-  local py='import sys, json, base64
+  # high-water ts. "prime" emits only the sentinel. base64 keeps multi-line
+  # commands on a single line. Two layers of Slack mangling are undone first:
+  # link markup like <http://cnn.com|cnn.com>, <@U1>, <#C1|name> is unwrapped to
+  # its display text, then the &lt;/&gt;/&amp; entity escapes are reversed.
+  local py='import sys, json, base64, re
 arg = sys.argv[1]
 prime = (arg == "prime")
 last = 0.0 if (prime or not arg) else float(arg)
+def unwrap(s):
+    def repl(m):
+        inner = m.group(1)
+        if "|" in inner:
+            return inner.split("|", 1)[1]
+        return re.sub(r"^(mailto:|https?://|@|#|!)", "", inner)
+    return re.sub(r"<([^<>]*)>", repl, s)
 d = json.load(sys.stdin)
 realmax = last
 hits = []
@@ -494,7 +503,7 @@ for m in d.get("messages", []):
     if (not prime) and t > last:
         txt = m.get("text", "")
         if txt.startswith("!!"):
-            cmd = txt[2:].replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&")
+            cmd = unwrap(txt[2:]).replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&")
             hits.append((t, m.get("ts", ""), base64.b64encode(cmd.encode()).decode()))
 hits.sort(key=lambda x: x[0])
 for t, ts, b in hits:
