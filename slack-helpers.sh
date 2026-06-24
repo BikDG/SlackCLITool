@@ -544,7 +544,7 @@ print("@@TS@@%r" % realmax)'
           IFS=$' \t' read -r kw arg _rest <<< "$cmd"
           case "$kw" in
             quit|stop)
-              if [ -z "$arg" ] || [ "$arg" = "$BASHPID" ] || [ "$arg" = "$host" ]; then
+              if [ -z "$arg" ] || [ "$arg" = "$BASHPID" ] || [ "${arg,,}" = "${host,,}" ]; then
                 _slack_api chat.postMessage "channel=$chan" "thread_ts=$ts" "text=runitnow: stopped (pid $BASHPID on $host)." >/dev/null
                 exit 0
               fi
@@ -555,7 +555,7 @@ print("@@TS@@%r" % realmax)'
             @*)
               # Targeted command: skip unless TARGET is our pid or hostname...
               local tgt="${kw#@}"
-              if [ "$tgt" != "$BASHPID" ] && [ "$tgt" != "$host" ]; then continue; fi
+              if [ "$tgt" != "$BASHPID" ] && [ "${tgt,,}" != "${host,,}" ]; then continue; fi
               # ...then strip the "@TARGET" token, leaving the real command in cmd.
               local lt="${cmd#"${cmd%%[![:space:]]*}"}"
               cmd="${lt#"$kw"}"
@@ -576,6 +576,13 @@ print("@@TS@@%r" % realmax)'
             eval "$RUNITNOW_CMD"' </dev/null >"$cf" 2>&1
           cout="$(cat "$cf")"; rm -f "$cf"
           [ -n "$cout" ] || cout="(no output)"
+          # Cap the output before posting. Slack limits message size, and exec
+          # limits a single argument to ~128 KB, so large output (e.g.
+          # `tailscale status`) would otherwise fail to send via curl and you'd
+          # get nothing back. Keep the head and note how much was dropped.
+          if [ "${#cout}" -gt 3000 ]; then
+            cout="${cout:0:3000}"$'\n'"... (truncated; full output was ${#cout} chars)"
+          fi
           # Lead with which instance answered, then the output in a code block.
           reply="$BASHPID running on machine $host replies:"$'\n''```'$'\n'"$cout"$'\n''```'
           _slack_api chat.postMessage "channel=$chan" "thread_ts=$ts" "text=$reply" >/dev/null
