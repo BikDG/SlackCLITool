@@ -260,3 +260,179 @@ notify_up() {
   echo "watching $host (pid $!). Will message you when it replies."
 }
 alias nup='notify_up'
+
+# Poll a conversation and print new messages as they arrive.
+# usage: listen TARGET [FREQ] [-t THREAD_TS]
+#   TARGET   #channel, @user, a name, or a channel/user/group id
+#   FREQ     polls per minute (default 15 = every 4s)
+#   -t TS    watch a single thread (its parent message ts) inside TARGET
+# Runs until interrupted with Ctrl-C. Only messages posted after it starts
+# are printed.
+listen() {
+  local thread="" pos=()
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      -t) thread="$2"; shift 2 ;;
+      *)  pos+=("$1"); shift ;;
+    esac
+  done
+  local target="${pos[0]:-}" freq="${pos[1]:-15}"
+  if [ -z "$target" ]; then
+    echo "usage: listen TARGET [FREQ] [-t THREAD_TS]" >&2
+    return 1
+  fi
+  case "$freq" in
+    ''|*[!0-9.]*|.|*.*.*) echo "listen: FREQ must be a positive number (polls/minute)" >&2; return 1 ;;
+  esac
+  local interval; interval="$(awk "BEGIN{f=$freq; if(f<=0){exit 1}; printf \"%.3f\", 60/f}")" \
+    || { echo "listen: FREQ must be greater than 0" >&2; return 1; }
+
+  local chan; chan="$(_slack_resolve "$target")"
+  if [ -z "$chan" ]; then echo "listen: could not resolve target '$target'" >&2; return 1; fi
+
+  # Build the history call once. A thread uses conversations.replies (channel+ts);
+  # otherwise conversations.history over the whole conversation.
+  local method="conversations.history" extra=()
+  if [ -n "$thread" ]; then method="conversations.replies"; extra=("ts=$thread"); fi
+
+  # Print messages newer than $1 (a ts), and emit the new high-water ts after a
+  # sentinel as the final line. "prime" prints nothing and just returns the ts.
+  # $2 is a file holding the users.list JSON (id -> display name map).
+  local py='import sys, json, re, datetime
+arg = sys.argv[1]
+prime = (arg == "prime")
+last = 0.0 if (prime or not arg) else float(arg)
+umap = {}
+try:
+    with open(sys.argv[2]) as f:
+        for u in (json.load(f) or {}).get("members", []):
+            p = u.get("profile") or {}
+            umap[u["id"]] = p.get("display_name") or u.get("name") or p.get("real_name") or u["id"]
+except Exception:
+    pass
+def sub_mentions(m):
+    return "@" + umap.get(m.group(1), m.group(1))
+d = json.load(sys.stdin)
+realmax = last
+new = []
+for m in d.get("messages", []):
+    try:
+        t = float(m.get("ts", "0"))
+    except ValueError:
+        continue
+    if t > realmax:
+        realmax = t
+    if (not prime) and t > last:
+        new.append((t, m))
+new.sort(key=lambda x: x[0])
+for t, m in new:
+    who = umap.get(m.get("user", ""), m.get("username") or m.get("user") or "?")
+    txt = re.sub(r"<@(\w+)>", sub_mentions, m.get("text", ""))
+    when = datetime.datetime.fromtimestamp(t).strftime("%H:%M:%S")
+    print("[%s] %s: %s" % (when, who, txt))
+print("@@TS@@%r" % realmax)'
+
+  # Run the poll loop in a subshell that owns the user-map temp file, so the
+  # users.list payload is read from disk (not passed via env, which can blow
+  # past ARG_MAX) and is cleaned up even on Ctrl-C.
+  (
+    umap="$(mktemp "${TMPDIR:-/tmp}/slack-listen.XXXXXX")" || exit 1
+    trap 'rm -f "$umap"' EXIT INT TERM
+    _slack_api users.list "limit=1000" > "$umap"
+
+    out="$(_slack_api "$method" "channel=$chan" "limit=200" "${extra[@]}" \
+          | python3 -c "$py" prime "$umap")"
+    last="${out##*@@TS@@}"
+
+    echo "listen: watching ${target}${thread:+ thread $thread} (every ${interval}s, ${freq}/min). Ctrl-C to stop." >&2
+    while :; do
+      out="$(_slack_api "$method" "channel=$chan" "limit=200" "${extra[@]}" \
+            | python3 -c "$py" "$last" "$umap")"
+      body="${out%@@TS@@*}"
+      last="${out##*@@TS@@}"
+      [ -n "$body" ] && printf '%s' "$body"
+      sleep "$interval"
+    done
+  )
+}
+
+# Recursively kill a process and all of its descendants. Used to stop the
+# background `listen` that `lad` drives.
+_kill_tree() {
+  local pid="$1" child
+  [ -n "$pid" ] || return 0
+  for child in $(pgrep -P "$pid" 2>/dev/null); do
+    _kill_tree "$child"
+  done
+  kill "$pid" 2>/dev/null
+}
+
+# Listen to a conversation and run a command when a matching message arrives.
+# usage: lad [PERSON] --message STRING --command CMD [--person WHO] [--loop true|false]
+#   PERSON       person/group/channel to listen to (same forms as `listen`);
+#                also settable with --person; defaults to "myself" (your own DM)
+#   --message    substring to watch for in incoming messages (required)
+#   --command    bash command to run on a match (required)
+#   --loop       true: run again on every match; false (default): stop after
+#                the first match
+# Flags accept either "--flag value" or "--flag=value".
+# On each match lad messages PERSON "running command: <cmd>", runs the command,
+# then messages "command completed: <output>". It ignores its own status
+# messages; in loop mode, pick a --message unlikely to appear in command output.
+lad() {
+  local pos="" person="" msg="" command="" loop="false"
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --person=*)  person="${1#*=}"; shift ;;
+      --person)    person="$2"; shift 2 ;;
+      --message=*) msg="${1#*=}"; shift ;;
+      --message)   msg="$2"; shift 2 ;;
+      --command=*) command="${1#*=}"; shift ;;
+      --command)   command="$2"; shift 2 ;;
+      --loop=*)    loop="${1#*=}"; shift ;;
+      --loop)      loop="$2"; shift 2 ;;
+      *) [ -z "$pos" ] && pos="$1"; shift ;;
+    esac
+  done
+  if [ -z "$msg" ] || [ -z "$command" ]; then
+    echo "usage: lad [PERSON] --message STRING --command CMD [--loop true|false]" >&2
+    return 1
+  fi
+  case "$loop" in true|1|yes|y|Y|True|TRUE) loop="true" ;; *) loop="false" ;; esac
+
+  # PERSON: explicit --person wins, else positional, else default to yourself.
+  local target="${person:-${pos:-myself}}" listen_target
+  case "$target" in
+    myself|self|me) listen_target="$(_slack_resolve "")"
+      if [ -z "$listen_target" ]; then echo "lad: could not resolve your own DM" >&2; return 1; fi ;;
+    *) listen_target="$target" ;;
+  esac
+
+  echo "lad: listening to $target for \"$msg\" (loop=$loop); on match runs: $command" >&2
+  # Subshell owns the fifo and the background listen, so traps are local and
+  # cleanup happens on a clean exit or on Ctrl-C.
+  (
+    fifo="$(mktemp -u "${TMPDIR:-/tmp}/lad.XXXXXX")"
+    mkfifo "$fifo" || exit 1
+    lpid=""
+    trap '[ -n "$lpid" ] && _kill_tree "$lpid"; rm -f "$fifo"' EXIT INT TERM
+    listen "$listen_target" > "$fifo" &
+    lpid=$!
+    while IFS= read -r line; do
+      # Strip the "[HH:MM:SS] name: " prefix so we match on message text only.
+      local text="${line#*: }"
+      case "$text" in
+        "running command: "*|"command completed:"*) continue ;;  # our own echoes
+      esac
+      case "$text" in
+        *"$msg"*)
+          send_message "$listen_target" "running command: $command" >/dev/null
+          local out; out="$(bash -c "$command" 2>&1)"
+          printf '%s\n' "$out"
+          send_message "$listen_target" "command completed: $out" >/dev/null
+          [ "$loop" = "true" ] || break
+          ;;
+      esac
+    done < "$fifo"
+  )
+}

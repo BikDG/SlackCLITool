@@ -14,6 +14,8 @@ still log into Slack in a browser.
 - `slack_upload` — upload a file (with `save_file` and `send_file` as shortcuts).
 - `list_files` / `fetch_file` — list and download files from a channel or your DM.
 - `lmk` — run a command, then Slack you its result and full output.
+- `listen` — poll a channel, DM, group, or thread and print new messages as they arrive.
+- `lad` — listen for a message matching a string, then run a command (once or on every match).
 - `notify_up` (alias `nup`) — ping a host until it replies, then message you.
 - `slack-refresh` — re-read the session from Firefox into `~/.slack_session`.
 
@@ -77,6 +79,37 @@ lmk -c '#builds' ./deploy.sh               # report the result to a channel
 
 `lmk` streams the command's output to your terminal as usual, then sends a
 pass/fail summary with the last 25 lines and attaches the full output as a file.
+
+Watch a conversation live:
+
+```sh
+listen @alice                              # poll a user's DM every 4s
+listen '#team'                             # poll a channel
+listen pablo 30                            # 30 polls/minute (every 2s)
+listen '#team' -t 1718900000.123456        # watch one thread by its parent ts
+```
+
+`listen` prints only messages posted after it starts, one per line as
+`[HH:MM:SS] name: text`. The frequency is polls per minute (default 15, i.e.
+every 4 seconds). It runs in the foreground until you stop it with Ctrl-C.
+
+Listen and do — run a command when a matching message arrives:
+
+```sh
+lad --message deploy --command './deploy.sh'                # watch your own DM
+lad @alice --message deploy --command './deploy.sh'         # fire once, then stop
+lad --person '#ops' --message restart --loop true --command 'systemctl restart app'
+```
+
+`lad` watches a person/group with `listen` and, when an incoming message
+contains the `--message` string, messages them `running command: <cmd>`, runs
+the command, then messages `command completed: <output>`.
+
+The person defaults to `myself` (your own DM); give it positionally or with
+`--person`. With `--loop false` (the default) it stops after the first match;
+with `--loop true` it keeps running and fires on every match. All flags accept
+`--flag value` or `--flag=value`. It ignores its own status messages, so in loop
+mode pick a `--message` that will not appear in your command's output.
 
 `notify_up` returns immediately and runs in the background of your shell. To
 survive logout, run it under `nohup`, `disown`, or inside `tmux`.
