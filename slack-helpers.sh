@@ -469,7 +469,8 @@ lad() {
 # starts are run. Commands run in a non-interactive shell that first sources
 # ~/.bashrc (with alias expansion on), so functions and aliases such as `nup`
 # work. Send "!!quit" (or "!!stop") in the channel to stop the watcher; you can
-# also stop it from the shell with `kill <pid>`.
+# also stop it from the shell with `kill <pid>`. Send "!!report" and every
+# watcher of the channel replies with its own pid.
 # WARNING: this executes arbitrary commands from the channel.
 runitnow() {
   local target="$1"
@@ -534,6 +535,10 @@ print("@@TS@@%r" % realmax)'
             quit|stop)
               _slack_api chat.postMessage "channel=$chan" "thread_ts=$ts" "text=runitnow: stopped." >/dev/null
               exit 0 ;;
+            report)
+              # Each watcher of this channel replies in-thread with its own pid.
+              _slack_api chat.postMessage "channel=$chan" "thread_ts=$ts" "text=runitnow: pid $BASHPID watching $target" >/dev/null
+              continue ;;
           esac
           # Run in a non-interactive shell, but source ~/.bashrc (with alias
           # expansion on) first so functions and aliases like `nup` work.
@@ -557,5 +562,5 @@ EOF
       sleep 1
     done
   ) &
-  echo "runitnow: watching $target every 1s for '!!' commands (pid $!). Stop with '!!quit' in the channel or: kill $!"
+  echo "runitnow: watching $target every 1s for '!!' commands (pid $!). '!!report' lists pids, '!!quit' stops (or: kill $!)"
 }
