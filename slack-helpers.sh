@@ -527,9 +527,13 @@ print("@@TS@@%r" % realmax)'
 
   (
     mypid="$BASHPID"   # this watcher's pid (used in replies from async workers)
+    # Per-instance registry of currently running command workers: one file per
+    # worker, named by worker pid, containing the command. Used by !!report.
+    taskdir="${TMPDIR:-/tmp}/runitnow-tasks-$mypid"
+    mkdir -p "$taskdir"
     # When this watcher stops, kill any still-running command workers (e.g. an
-    # un-capped ping) instead of orphaning them.
-    _rin_stop() { trap - EXIT INT TERM; for _p in $(jobs -p); do _kill_tree "$_p" 2>/dev/null; done; exit; }
+    # un-capped ping) and drop the registry instead of orphaning them.
+    _rin_stop() { trap - EXIT INT TERM; for _p in $(jobs -p); do _kill_tree "$_p" 2>/dev/null; done; rm -rf "$taskdir"; exit; }
     trap _rin_stop EXIT INT TERM
     last="$(_slack_api conversations.history "channel=$chan" "limit=200" | python3 -c "$py" prime)"
     last="${last##*@@TS@@}"
@@ -558,7 +562,17 @@ print("@@TS@@%r" % realmax)'
               fi
               continue ;;   # target given but not us: stay silent, keep running
             report)
-              _slack_api chat.postMessage "channel=$chan" "thread_ts=$ts" "text=runitnow: pid $mypid on $host watching $target" >/dev/null
+              # Roll up this instance's currently running command workers.
+              tasks="" ; n=0
+              for tf in "$taskdir"/*; do
+                [ -e "$tf" ] || continue
+                n=$((n + 1))
+                tcmd="$(<"$tf")"; tcmd="${tcmd//$'\n'/ }"; tcmd="${tcmd:0:200}"
+                tasks="$tasks"$'\n'"[${tf##*/}] $tcmd"
+              done
+              rtext="runitnow: pid $mypid on $host watching $target — running tasks ($n):"
+              [ "$n" -gt 0 ] && rtext="$rtext"$'\n''```'"$tasks"$'\n''```'
+              _slack_api chat.postMessage "channel=$chan" "thread_ts=$ts" "text=$rtext" >/dev/null
               continue ;;
             @*)
               # Targeted command: skip unless TARGET is our pid or hostname...
@@ -575,6 +589,8 @@ print("@@TS@@%r" % realmax)'
           # other messages. Variables are snapshotted at fork, so each worker
           # carries its own cmd/ts.
           (
+            wpid="$BASHPID"
+            printf '%s\n' "$cmd" >"$taskdir/$wpid" 2>/dev/null   # register running task
             # Non-interactive shell, but source ~/.bashrc (alias expansion on) so
             # functions/aliases like `nup` work; sourcing output is discarded.
             # Capture to a file (not "$(...)") with stdin closed so a command
@@ -596,7 +612,7 @@ print("@@TS@@%r" % realmax)'
             reply="$mypid running on machine $host replies:"$'\n''```'$'\n'"$cout"$'\n''```'
             _slack_api chat.postMessage "channel=$chan" "thread_ts=$ts" "text=$reply" >/dev/null
             [ "$big" -eq 1 ] && _slack_upload "$chan" "$cf" "full output from pid $mypid on $host" "$ts" "output-$mypid-$host.txt" >/dev/null 2>&1
-            rm -f "$cf"
+            rm -f "$cf" "$taskdir/$wpid"
           ) &
         done <<EOF
 $body
