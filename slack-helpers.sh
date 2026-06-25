@@ -526,6 +526,11 @@ for t, ts, b in hits:
 print("@@TS@@%r" % realmax)'
 
   (
+    mypid="$BASHPID"   # this watcher's pid (used in replies from async workers)
+    # When this watcher stops, kill any still-running command workers (e.g. an
+    # un-capped ping) instead of orphaning them.
+    _rin_stop() { trap - EXIT INT TERM; for _p in $(jobs -p); do _kill_tree "$_p" 2>/dev/null; done; exit; }
+    trap _rin_stop EXIT INT TERM
     last="$(_slack_api conversations.history "channel=$chan" "limit=200" | python3 -c "$py" prime)"
     last="${last##*@@TS@@}"
     while :; do
@@ -547,52 +552,52 @@ print("@@TS@@%r" % realmax)'
           IFS=$' \t' read -r kw arg _rest <<< "$cmd"
           case "$kw" in
             quit|stop)
-              if [ -z "$arg" ] || [ "$arg" = "$BASHPID" ] || [ "${arg,,}" = "${host,,}" ]; then
-                _slack_api chat.postMessage "channel=$chan" "thread_ts=$ts" "text=runitnow: stopped (pid $BASHPID on $host)." >/dev/null
+              if [ -z "$arg" ] || [ "$arg" = "$mypid" ] || [ "${arg,,}" = "${host,,}" ]; then
+                _slack_api chat.postMessage "channel=$chan" "thread_ts=$ts" "text=runitnow: stopped (pid $mypid on $host)." >/dev/null
                 exit 0
               fi
               continue ;;   # target given but not us: stay silent, keep running
             report)
-              _slack_api chat.postMessage "channel=$chan" "thread_ts=$ts" "text=runitnow: pid $BASHPID on $host watching $target" >/dev/null
+              _slack_api chat.postMessage "channel=$chan" "thread_ts=$ts" "text=runitnow: pid $mypid on $host watching $target" >/dev/null
               continue ;;
             @*)
               # Targeted command: skip unless TARGET is our pid or hostname...
               local tgt="${kw#@}"
-              if [ "$tgt" != "$BASHPID" ] && [ "${tgt,,}" != "${host,,}" ]; then continue; fi
+              if [ "$tgt" != "$mypid" ] && [ "${tgt,,}" != "${host,,}" ]; then continue; fi
               # ...then strip the "@TARGET" token, leaving the real command in cmd.
               local lt="${cmd#"${cmd%%[![:space:]]*}"}"
               cmd="${lt#"$kw"}"
               cmd="${cmd#"${cmd%%[![:space:]]*}"}"
               ;;
           esac
-          # Run in a non-interactive shell, but source ~/.bashrc (with alias
-          # expansion on) first so functions and aliases like `nup` work.
-          # Sourcing output is discarded so only the command's output is sent.
-          # Capture to a file (not "$(...)") with stdin closed: commands that
-          # background a job (e.g. nup) would otherwise keep the substitution
-          # pipe open and hang the whole loop. The file decouples us from any
-          # lingering background process, which keeps running on its own.
-          cf="$(mktemp "${TMPDIR:-/tmp}/runitnow.XXXXXX")"
-          RUNITNOW_CMD="$cmd" bash -c '
-            shopt -s expand_aliases
-            [ -f "$HOME/.bashrc" ] && source "$HOME/.bashrc" >/dev/null 2>&1
-            eval "$RUNITNOW_CMD"' </dev/null >"$cf" 2>&1
-          cout="$(cat "$cf")"
-          [ -n "$cout" ] || cout="(no output)"
-          # Cap the inlined output. Slack limits message size, and exec limits a
-          # single argument to ~128 KB, so large output (e.g. `tailscale status`)
-          # can't be posted as text. Inline the head; attach the full output as a
-          # file in the thread when it was truncated.
-          local big=0
-          if [ "${#cout}" -gt 3000 ]; then
-            cout="${cout:0:3000}"$'\n'"... (truncated; full output was ${#cout} chars — see attached file)"
-            big=1
-          fi
-          # Lead with which instance answered, then the output in a code block.
-          reply="$BASHPID running on machine $host replies:"$'\n''```'$'\n'"$cout"$'\n''```'
-          _slack_api chat.postMessage "channel=$chan" "thread_ts=$ts" "text=$reply" >/dev/null
-          [ "$big" -eq 1 ] && _slack_upload "$chan" "$cf" "full output from pid $BASHPID on $host" "$ts" "output-$BASHPID-$host.txt" >/dev/null 2>&1
-          rm -f "$cf"
+          # Run each command in its own background worker so a long-running one
+          # (e.g. an un-capped `ping`) doesn't block the watcher from handling
+          # other messages. Variables are snapshotted at fork, so each worker
+          # carries its own cmd/ts.
+          (
+            # Non-interactive shell, but source ~/.bashrc (alias expansion on) so
+            # functions/aliases like `nup` work; sourcing output is discarded.
+            # Capture to a file (not "$(...)") with stdin closed so a command
+            # that backgrounds a child can't hold a pipe open.
+            cf="$(mktemp "${TMPDIR:-/tmp}/runitnow.XXXXXX")"
+            RUNITNOW_CMD="$cmd" bash -c '
+              shopt -s expand_aliases
+              [ -f "$HOME/.bashrc" ] && source "$HOME/.bashrc" >/dev/null 2>&1
+              eval "$RUNITNOW_CMD"' </dev/null >"$cf" 2>&1
+            cout="$(cat "$cf")"
+            [ -n "$cout" ] || cout="(no output)"
+            # Cap the inlined output (Slack message + ~128 KB exec-arg limits);
+            # attach the full output as a thread file when it was truncated.
+            big=0
+            if [ "${#cout}" -gt 3000 ]; then
+              cout="${cout:0:3000}"$'\n'"... (truncated; full output was ${#cout} chars — see attached file)"
+              big=1
+            fi
+            reply="$mypid running on machine $host replies:"$'\n''```'$'\n'"$cout"$'\n''```'
+            _slack_api chat.postMessage "channel=$chan" "thread_ts=$ts" "text=$reply" >/dev/null
+            [ "$big" -eq 1 ] && _slack_upload "$chan" "$cf" "full output from pid $mypid on $host" "$ts" "output-$mypid-$host.txt" >/dev/null 2>&1
+            rm -f "$cf"
+          ) &
         done <<EOF
 $body
 EOF
